@@ -20,6 +20,7 @@ class MainActivity : Activity() {
  private lateinit var preview:ImageView
  private var selection: RectF? = null
  private var selectionBitmap: Bitmap? = null
+ private val originals=mutableListOf<Bitmap>()
  private lateinit var list:LinearLayout
  private lateinit var info:TextView
  private val margins= mutableListOf<SeekBar>()
@@ -81,7 +82,8 @@ class MainActivity : Activity() {
  }
  private fun add(b:Bitmap){
   val s=min(1f,2000f/max(b.width,b.height))
-  pages.add(Page(Bitmap.createScaledBitmap(b,max(1,(b.width*s).toInt()),max(1,(b.height*s).toInt()),true)))
+  val scaled=Bitmap.createScaledBitmap(b,max(1,(b.width*s).toInt()),max(1,(b.height*s).toInt()),true)
+  pages.add(Page(scaled));originals.add(scaled.copy(Bitmap.Config.ARGB_8888,false))
   current=pages.lastIndex;detectSelection();refresh()
  }
  private fun refresh(){
@@ -101,7 +103,16 @@ class MainActivity : Activity() {
   if(pages.isEmpty())return
   val target=current+d
   if(target !in pages.indices)return
-  java.util.Collections.swap(pages,current,target);current=target;detectSelection();refresh()
+  java.util.Collections.swap(pages,current,target);java.util.Collections.swap(originals,current,target);current=target;detectSelection();refresh()
+ }
+ private fun blackWhite(){
+  modify { src ->
+   val b=src.copy(Bitmap.Config.ARGB_8888,true)
+   val pixels=IntArray(b.width*b.height)
+   b.getPixels(pixels,0,b.width,0,0,b.width,b.height)
+   for(i in pixels.indices){val c=pixels[i];val v=(Color.red(c)*299+Color.green(c)*587+Color.blue(c)*114)/1000;val k=if(v>=150)255 else 0;pixels[i]=Color.rgb(k,k,k)}
+   b.setPixels(pixels,0,b.width,0,0,b.width,b.height);b
+  }
  }
  private fun clean(){
   modify{src->
@@ -155,7 +166,7 @@ class MainActivity : Activity() {
  }
 
  private fun showOptions(){
-  val names=arrayOf("Otomatik seç ve kırp","Kenarları elle ayarla","Seçimi uygula ve netleştir","Döndür","Temizle","Önceki sıraya taşı","Sonraki sıraya taşı","Sayfayı onayla","Sayfayı sil","İptal")
+  val names=arrayOf("Otomatik seç ve kırp","Kenarları elle ayarla","Seçimi uygula ve netleştir","Döndür","Gri tonlama","Siyah-beyaz","Orijinale dön","Önceki sıraya taşı","Sonraki sıraya taşı","Sayfayı onayla","Sayfayı sil","İptal")
   android.app.AlertDialog.Builder(this).setTitle("Sayfa işlemleri").setItems(names){_,which->
    when(which){
     0->{detectSelection();refresh()}
@@ -163,10 +174,12 @@ class MainActivity : Activity() {
     2->{val r=selection;if(r!=null){crop(r.left,r.top,r.right,r.bottom);clean()}else message("Kenar seçimi bulunamadı")}
     3->modify{b->val m=Matrix().apply{postRotate(90f)};Bitmap.createBitmap(b,0,0,b.width,b.height,m,true)}
     4->clean()
-    5->move(-1)
-    6->move(1)
-    7->{pages[current].approved=true;refresh()}
-    8->{pages.removeAt(current);current=(current-1).coerceAtLeast(0);detectSelection();refresh()}
+    5->blackWhite()
+    6->{pages[current].bitmap=originals[current].copy(Bitmap.Config.ARGB_8888,false);pages[current].approved=false;detectSelection();refresh()}
+    7->move(-1)
+    8->move(1)
+    9->{pages[current].approved=true;refresh()}
+    10->{pages.removeAt(current);originals.removeAt(current);current=(current-1).coerceAtLeast(0);detectSelection();refresh()}
    }
   }.show()
  }
