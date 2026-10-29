@@ -18,6 +18,8 @@ class MainActivity : Activity() {
  private val pages= mutableListOf<Page>()
  private var current=0
  private lateinit var preview:ImageView
+ private var selection: RectF? = null
+ private var selectionBitmap: Bitmap? = null
  private lateinit var list:LinearLayout
  private lateinit var info:TextView
  private val margins= mutableListOf<SeekBar>()
@@ -28,7 +30,7 @@ class MainActivity : Activity() {
   window.statusBarColor=Color.rgb(248,250,252)
   window.navigationBarColor=Color.BLACK
   window.decorView.systemUiVisibility=View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
-  val root=LinearLayout(this).apply { orientation=1;setPadding(dp(2f),dp(.5f),dp(2f),dp(.5f));setBackgroundColor(Color.rgb(248,250,252)) }
+  val root=LinearLayout(this).apply { orientation=1;setPadding(dp(2f),dp(.5f),dp(2f),dp(10f));setBackgroundColor(Color.rgb(248,250,252)) }
   val title=TextView(this).apply{text="Pdf  •  Belge Tarayıcı";textSize=20f;setTextColor(Color.rgb(2,132,199));setPadding(dp(12f),dp(12f),0,dp(10f))}
   root.addView(title)
   val actions=LinearLayout(this).apply{orientation=0}
@@ -37,7 +39,7 @@ class MainActivity : Activity() {
   }
   action(actions,"Kamera"){startActivityForResult(Intent(MediaStore.ACTION_IMAGE_CAPTURE),2)}
   action(actions,"Resimler"){startActivityForResult(Intent(Intent.ACTION_OPEN_DOCUMENT).apply{type="image/*";addCategory(Intent.CATEGORY_OPENABLE);putExtra(Intent.EXTRA_ALLOW_MULTIPLE,true)},1)}
-  action(actions,"PDF Kaydet"){savePdf()}
+  action(actions,"Bitti"){pages.forEach { it.approved=true };refresh();savePdf()}
   root.addView(actions)
   info=TextView(this).apply{setPadding(dp(10f),dp(5f),0,dp(5f));textSize=13f}
   root.addView(info)
@@ -52,15 +54,14 @@ class MainActivity : Activity() {
   action(tools,"Kırp"){manualCrop()}
   action(tools,"Döndür"){modify{b->val m=Matrix().apply{postRotate(90f)};Bitmap.createBitmap(b,0,0,b.width,b.height,m,true)}}
   action(tools,"Temizle"){clean()}
-  root.addView(tools)
   val tools2=LinearLayout(this)
   action(tools2,"◀ Sıra"){move(-1)}
   action(tools2,"Sıra ▶"){move(1)}
   action(tools2,"Onayla"){if(pages.isNotEmpty()){pages[current].approved=true;refresh()}}
   action(tools2,"Sil"){if(pages.isNotEmpty()){pages.removeAt(current);current=(current-1).coerceAtLeast(0);refresh()}}
-  root.addView(tools2)
   val footer=TextView(this).apply{text="Muhammed Yusuf OLGUN";gravity=Gravity.CENTER;textSize=12f;setTextColor(Color.LTGRAY);setPadding(0,dp(4f),0,dp(4f))}
   root.addView(footer)
+  preview.setOnClickListener { if(pages.isNotEmpty())showOptions() }
   setContentView(root);refresh()
  }
  override fun onActivityResult(requestCode:Int,resultCode:Int,data:Intent?){
@@ -81,26 +82,26 @@ class MainActivity : Activity() {
  private fun add(b:Bitmap){
   val s=min(1f,2000f/max(b.width,b.height))
   pages.add(Page(Bitmap.createScaledBitmap(b,max(1,(b.width*s).toInt()),max(1,(b.height*s).toInt()),true)))
-  current=pages.lastIndex;refresh()
+  current=pages.lastIndex;detectSelection();refresh()
  }
  private fun refresh(){
   info.text=if(pages.isEmpty())"Kamera ile çekin veya galeriden resim seçin" else "Sayfa ${current+1} / ${pages.size}  •  ${if(pages[current].approved)"Onaylandı ✓" else "Düzenleniyor"}"
-  preview.setImageBitmap(pages.getOrNull(current)?.bitmap)
+  preview.setImageBitmap(pages.getOrNull(current)?.bitmap?.let { marked(it) })
   list.removeAllViews()
   pages.forEachIndexed{i,p->
-   val b=Button(this).apply{text="${i+1}${if(p.approved)" ✓" else ""}";textSize=12f;setOnClickListener{current=i;refresh()}}
+   val b=Button(this).apply{text="${i+1}${if(p.approved)" ✓" else ""}";textSize=12f;setOnClickListener{current=i;detectSelection();refresh()}}
    list.addView(b,LinearLayout.LayoutParams(dp(66f),dp(53f)))
   }
  }
  private fun modify(f:(Bitmap)->Bitmap){
   if(pages.isEmpty())return
-  try{pages[current].bitmap=f(pages[current].bitmap);pages[current].approved=false;refresh()}catch(e:Exception){message("Düzenleme başarısız")}
+  try{pages[current].bitmap=f(pages[current].bitmap);pages[current].approved=false;detectSelection();refresh()}catch(e:Exception){message("Düzenleme başarısız")}
  }
  private fun move(d:Int){
   if(pages.isEmpty())return
   val target=current+d
   if(target !in pages.indices)return
-  java.util.Collections.swap(pages,current,target);current=target;refresh()
+  java.util.Collections.swap(pages,current,target);current=target;detectSelection();refresh()
  }
  private fun clean(){
   modify{src->
@@ -151,6 +152,48 @@ class MainActivity : Activity() {
    (right-left)*(bottom-top)<src.width*src.height*.97){
    crop(left.toFloat()/src.width,top.toFloat()/src.height,(right+step).toFloat()/src.width,(bottom+step).toFloat()/src.height)
   }else message("Kenar güvenle belirlenemedi; manuel kırpın")
+ }
+
+ private fun showOptions(){
+  val names=arrayOf("Otomatik seç ve kırp","Kenarları elle ayarla","Seçimi uygula ve netleştir","Döndür","Temizle","Önceki sıraya taşı","Sonraki sıraya taşı","Sayfayı onayla","Sayfayı sil","İptal")
+  android.app.AlertDialog.Builder(this).setTitle("Sayfa işlemleri").setItems(names){_,which->
+   when(which){
+    0->{detectSelection();refresh()}
+    1->manualCrop()
+    2->{val r=selection;if(r!=null){crop(r.left,r.top,r.right,r.bottom);clean()}else message("Kenar seçimi bulunamadı")}
+    3->modify{b->val m=Matrix().apply{postRotate(90f)};Bitmap.createBitmap(b,0,0,b.width,b.height,m,true)}
+    4->clean()
+    5->move(-1)
+    6->move(1)
+    7->{pages[current].approved=true;refresh()}
+    8->{pages.removeAt(current);current=(current-1).coerceAtLeast(0);detectSelection();refresh()}
+   }
+  }.show()
+ }
+ private fun marked(src:Bitmap):Bitmap{
+  val r=selection?:return src
+  val b=src.copy(Bitmap.Config.ARGB_8888,true)
+  val c=Canvas(b)
+  val p=Paint(3).apply{color=Color.rgb(2,132,199);style=Paint.Style.STROKE;strokeWidth=max(3f,src.width/300f)}
+  val box=RectF(r.left*src.width,r.top*src.height,r.right*src.width,r.bottom*src.height)
+  c.drawRect(box,p)
+  p.style=Paint.Style.FILL
+  for(x in arrayOf(box.left,box.right))for(y in arrayOf(box.top,box.bottom))c.drawCircle(x,y,max(7f,src.width/150f),p)
+  return b
+ }
+ private fun detectSelection(){
+  selection=null
+  val src=pages.getOrNull(current)?.bitmap?:return
+  val step=max(1,max(src.width,src.height)/350)
+  var left=src.width;var top=src.height;var right=0;var bottom=0;var count=0
+  for(y in 0 until src.height step step)for(x in 0 until src.width step step){
+   val c=src.getPixel(x,y)
+   val v=(Color.red(c)+Color.green(c)+Color.blue(c))/3
+   if(v>195){left=min(left,x);top=min(top,y);right=max(right,x);bottom=max(bottom,y);count++}
+  }
+  if(count>15&&right-left>src.width*.45&&bottom-top>src.height*.45&&(right-left)*(bottom-top)<src.width*src.height*.97)
+   selection=RectF(left.toFloat()/src.width,top.toFloat()/src.height,((right+step).toFloat()/src.width).coerceAtMost(1f),((bottom+step).toFloat()/src.height).coerceAtMost(1f))
+  else selection=RectF(0f,0f,1f,1f)
  }
  private fun savePdf(){
   if(pages.isEmpty()){message("Önce sayfa ekleyin");return}
